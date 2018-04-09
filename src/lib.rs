@@ -21,12 +21,20 @@ use hyper::net::{HttpStream, NetworkStream};
 #[cfg(feature = "client")] use hyper::net::SslClient;
 #[cfg(feature = "server")] use hyper::net::SslServer;
 
-pub struct TlsStream<S: Session> {
+pub struct TlsStream<S: Session, U: NetworkStream = HttpStream> {
     session: S,
-    underlying: HttpStream,
+    underlying: U,
 }
 
-impl<S: Session> TlsStream<S> {
+impl<S: Session, U: NetworkStream> TlsStream<S, U> {
+    #[inline]
+    pub fn new(session: S, stream: U) -> TlsStream<S, U> {
+        TlsStream {
+            session: session,
+            underlying: stream,
+        }
+    }
+
     #[inline(always)]
     fn close(&mut self, how: Shutdown) -> io::Result<()> {
         self.underlying.close(how)
@@ -48,7 +56,7 @@ impl<S: Session> TlsStream<S> {
     }
 }
 
-impl<S: Session> io::Read for TlsStream<S> {
+impl<S: Session, U: NetworkStream> io::Read for TlsStream<S, U> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             match self.session.read(buf)? {
@@ -83,7 +91,7 @@ impl<S: Session> io::Read for TlsStream<S> {
     }
 }
 
-impl<S: Session> io::Write for TlsStream<S> {
+impl<S: Session, U: NetworkStream> io::Write for TlsStream<S, U> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let len = self.session.write(buf)?;
@@ -99,30 +107,35 @@ impl<S: Session> io::Write for TlsStream<S> {
     }
 }
 
-pub struct WrappedStream<S: Session>(Arc<Mutex<TlsStream<S>>>);
+pub struct WrappedStream<S: Session, U: NetworkStream = HttpStream>(Arc<Mutex<TlsStream<S, U>>>);
 
-impl<S: Session> Clone for WrappedStream<S> {
+impl<S: Session, U: NetworkStream> Clone for WrappedStream<S, U> {
     #[inline]
     fn clone(&self) -> Self {
         WrappedStream(self.0.clone())
     }
 }
 
-impl<S: Session> WrappedStream<S> {
+impl<S: Session, U: NetworkStream> WrappedStream<S, U> {
     #[inline]
-    fn lock(&self) -> MutexGuard<TlsStream<S>> {
+    pub fn new(tls: TlsStream<S, U>) -> WrappedStream<S, U> {
+        WrappedStream(Arc::new(Mutex::new(tls)))
+    }
+
+    #[inline]
+    fn lock(&self) -> MutexGuard<TlsStream<S, U>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
-impl<S: Session> io::Read for WrappedStream<S> {
+impl<S: Session, U: NetworkStream> io::Read for WrappedStream<S, U> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.lock().read(buf)
     }
 }
 
-impl<S: Session> io::Write for WrappedStream<S> {
+impl<S: Session, U: NetworkStream> io::Write for WrappedStream<S, U> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.lock().write(buf)
@@ -134,7 +147,7 @@ impl<S: Session> io::Write for WrappedStream<S> {
     }
 }
 
-impl<S: Session + 'static> NetworkStream for WrappedStream<S> {
+impl<S: Session + 'static, U: NetworkStream> NetworkStream for WrappedStream<S, U> {
     #[inline]
     fn peer_addr(&mut self) -> io::Result<SocketAddr> {
         self.lock().peer_addr()
