@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::net::{SocketAddr, Shutdown};
 use std::time::Duration;
 
-use rustls::Session;
+use rustls::{Certificate, Session};
 #[cfg(feature = "client")] pub use rustls::ClientSession;
 #[cfg(feature = "server")] pub use rustls::ServerSession;
 
@@ -53,6 +53,11 @@ impl<S: Session, U: NetworkStream> TlsStream<S, U> {
     #[inline(always)]
     fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
         self.underlying.set_write_timeout(dur)
+    }
+
+    #[inline(always)]
+    fn get_peer_certificates(&self) -> Option<Vec<Certificate>> {
+        self.session.get_peer_certificates()
     }
 }
 
@@ -125,6 +130,11 @@ impl<S: Session, U: NetworkStream> WrappedStream<S, U> {
     #[inline]
     fn lock(&self) -> MutexGuard<TlsStream<S, U>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[inline]
+    pub fn get_peer_certificates(&self) -> Option<Vec<Certificate>> {
+        self.lock().get_peer_certificates()
     }
 }
 
@@ -225,7 +235,7 @@ pub struct TlsServer {
 impl TlsServer {
     pub fn new(certs: Vec<rustls::Certificate>, key: rustls::PrivateKey, ca_certs: Option<rustls::RootCertStore>) -> TlsServer {
         let client_auth = match ca_certs {
-            Some(ca_certs) => rustls::AllowAnyAuthenticatedClient::new(ca_certs),
+            Some(ca_certs) => rustls::AllowAnyAnonymousOrAuthenticatedClient::new(ca_certs),
             None => rustls::NoClientAuth::new()
         };
         let mut tls_config = rustls::ServerConfig::new(client_auth);
