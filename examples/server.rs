@@ -43,7 +43,7 @@ fn echo(mut req: Request, mut res: Response) {
 }
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
     let certs = hyper_sync_rustls::util::load_certs("examples/sample.pem").expect("certs");
     let key = hyper_sync_rustls::util::load_private_key("examples/sample.rsa").expect("priv key");
     let tls = hyper_sync_rustls::TlsServer::new(certs, key, None);
