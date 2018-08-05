@@ -262,7 +262,7 @@ impl SslServer for TlsServer {
 
 pub mod util {
     use std::fs;
-    use std::io::{self, BufReader};
+    use std::io::{self, BufReader, Read, Seek};
     use std::path::Path;
     use std::error;
     use std::fmt;
@@ -305,15 +305,22 @@ pub mod util {
 
     pub fn load_certs<P: AsRef<Path>>(path: P) -> Result<Vec<rustls::Certificate>> {
         let certfile = fs::File::open(path.as_ref()).map_err(|e| Error::Io(e))?;
+        load_certs_from_read(certfile)
+    }
+
+    pub fn load_certs_from_read<R: Read>(certfile: R) -> Result<Vec<rustls::Certificate>> {
         let mut reader = BufReader::new(certfile);
         pemfile::certs(&mut reader).map_err(|_| Error::BadCerts)
     }
 
     pub fn load_private_key<P: AsRef<Path>>(path: P) -> Result<rustls::PrivateKey> {
-        use std::io::Seek;
+        let keyfile = fs::File::open(path.as_ref()).map_err(Error::Io)?;
+        load_private_key_from_read(keyfile)
+    }
+
+    pub fn load_private_key_from_read<R: Read + Seek>(keyfile: R) -> Result<rustls::PrivateKey> {
         use std::io::BufRead;
 
-        let keyfile = fs::File::open(path.as_ref()).map_err(Error::Io)?;
         let mut reader = BufReader::new(keyfile);
 
         // "rsa" (PKCS1) PEM files have a different first-line header than PKCS8
