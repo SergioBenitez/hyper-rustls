@@ -46,7 +46,7 @@ fn main() {
     env_logger::init();
     let certs = hyper_sync_rustls::util::load_certs("examples/sample.pem").expect("certs");
     let key = hyper_sync_rustls::util::load_private_key("examples/sample.rsa").expect("priv key");
-    let tls = hyper_sync_rustls::TlsServer::new(certs, key);
+    let tls = hyper_sync_rustls::TlsServer::new(certs, key, None);
     let server = Server::https("127.0.0.1:8111", tls).expect("server start");
     let _guard = server.handle(echo);
     println!("Listening on https://127.0.0.1:8111");

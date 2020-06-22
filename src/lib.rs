@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::net::{SocketAddr, Shutdown};
 use std::time::Duration;
 
-use rustls::Session;
+use rustls::{Certificate, Session};
 #[cfg(feature = "client")] pub use rustls::ClientSession;
 #[cfg(feature = "server")] pub use rustls::ServerSession;
 
@@ -53,6 +53,11 @@ impl<S: Session, U: NetworkStream> TlsStream<S, U> {
     #[inline(always)]
     fn set_write_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
         self.underlying.set_write_timeout(dur)
+    }
+
+    #[inline(always)]
+    fn get_peer_certificates(&self) -> Option<Vec<Certificate>> {
+        self.session.get_peer_certificates()
     }
 }
 
@@ -125,6 +130,11 @@ impl<S: Session, U: NetworkStream> WrappedStream<S, U> {
     #[inline]
     fn lock(&self) -> MutexGuard<TlsStream<S, U>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[inline]
+    pub fn get_peer_certificates(&self) -> Option<Vec<Certificate>> {
+        self.lock().get_peer_certificates()
     }
 }
 
@@ -224,8 +234,11 @@ pub struct TlsServer {
 #[cfg(feature = "server")]
 impl TlsServer {
     /// Panics if `key` is invalid.
-    pub fn new(certs: Vec<rustls::Certificate>, key: rustls::PrivateKey) -> TlsServer {
-        let client_auth = rustls::NoClientAuth::new();
+    pub fn new(certs: Vec<rustls::Certificate>, key: rustls::PrivateKey, ca_certs: Option<rustls::RootCertStore>) -> TlsServer {
+        let client_auth = match ca_certs {
+            Some(ca_certs) => rustls::AllowAnyAnonymousOrAuthenticatedClient::new(ca_certs),
+            None => rustls::NoClientAuth::new()
+        };
         let mut tls_config = rustls::ServerConfig::new(client_auth);
         let cache = rustls::ServerSessionMemoryCache::new(1024);
         tls_config.set_persistence(cache);
@@ -275,6 +288,7 @@ pub mod util {
     pub enum Error {
         Io(io::Error),
         BadCerts,
+        BadCertStoreEntry,
         BadKeyCount,
         BadKey,
     }
@@ -287,6 +301,7 @@ pub mod util {
                 #[allow(deprecated)]
                 Error::Io(ref e) => e.description(),
                 Error::BadCerts => "the contents of the certificates file were invalid",
+                Error::BadCertStoreEntry => "the certificate store could not add the root certificate",
                 Error::BadKeyCount => "the private key file contained more than one key",
                 Error::BadKey => "the contents of the private key file were invalid",
             }
@@ -298,6 +313,7 @@ pub mod util {
             match *self {
                 Error::Io(ref e) => write!(f, "I/O Error: {}", e),
                 Error::BadCerts => write!(f, "invalid certificates file contents"),
+                Error::BadCertStoreEntry => write!(f, "certificate could not be added to certificate store"),
                 Error::BadKeyCount => write!(f, "more than one key in private key file"),
                 Error::BadKey => write!(f, "invalid private key file contents"),
             }
@@ -308,6 +324,29 @@ pub mod util {
         let certfile = fs::File::open(path.as_ref()).map_err(|e| Error::Io(e))?;
         let mut reader = BufReader::new(certfile);
         pemfile::certs(&mut reader).map_err(|_| Error::BadCerts)
+    }
+
+    pub fn load_cert_store_certs<P: AsRef<Path>>(path: P) -> Result<Vec<rustls::Certificate>> {
+        use std::fs::OpenOptions;
+        let mut cert_vec: Vec<rustls::Certificate> = Vec::new();
+        let cert_store_dir = fs::read_dir(path.as_ref()).map_err(|e| Error::Io(e))?;
+        for dir_entry in cert_store_dir {
+            let entry = dir_entry.map_err(|e| Error::Io(e))?;
+            let path = entry.path();
+            let path = path.as_path();
+            let mut cert_file = OpenOptions::new().read(true).open(path).map_err(|e| Error::Io(e))?;
+            let mut reader = BufReader::new(cert_file);
+            pemfile::certs(&mut reader).map(|mut cert| cert_vec.append(&mut cert)).map_err(|()| Error::BadCerts)?;
+        }
+        Ok(cert_vec)
+    }
+
+    pub fn generate_cert_store(certs_vector: Vec<rustls::Certificate>) -> Result<rustls::RootCertStore> {
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        for cert in certs_vector {
+            root_cert_store.add(&cert).map_err(|_| Error::BadCertStoreEntry)?;
+        }
+        Ok(root_cert_store)
     }
 
     pub fn load_private_key<P: AsRef<Path>>(path: P) -> Result<rustls::PrivateKey> {
